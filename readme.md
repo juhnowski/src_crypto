@@ -194,3 +194,204 @@ openssl rand -hex 32
 
 ./a.out somefile.txt 2fc498c4a4ba59c76ef9c56525a3aaeb5df2af4d7413317d234f7bf12e3e73c5
 ```
+
+# KDF - Key Derivation Function 
+Функция формирования ключа
+IKM(Input Key Material) -> KDF -> OKM (Output Key Material)
+PBKDF - Password-Based Key Derivation Function
+
+Входные параметры KDF
+- IKM, например пароль
+- соль - случайно сгенерированные данные
+- информация, зависящая от приложения
+- базовая псевдослучайная функция PRF - PseudoRandom Function, например функция вычисления HMAC или блочный шифр
+- параметры для функции PFR, стойкие к полному перебору, например счетчик операций
+- желаемая длина OKM
+
+Энтропия пароля:
+Entropy =log2(nchar^plen)
+nchar - количество возможных символов, 80 (большие, маленькие, цифры, символы)
+plen - длина пароля
+8 символов = 51 бит
+12 символов = 76 бит
+
+Если PBKDF формирует 256-битовый ключ из пароля, содержащего 76 бит энтропии, и соль открыта, то выходной ключ все равно будет содержать только 76 бит энтропии
+
+OpenSSL поддерживает:
+- PBKDF2 - HMAC-SHA-256, настраиваемое число операций, высокое потребление процессора, OWASP (Open Web Application Security Project) рекомендовано 310 000 итераиций 
+- Scrypt - лушая, может быть настроен как на потребление процессора, так и памяти. В 2021 OWASP рекомендовал N=65536, r=8, p=1
+- KDF, HKDF - не являются вычислительно трудоемкими
+- ANSI X9.42, ANSI X9.63 и TLS1  не являются вычислительно трудоемкими
+## Формирование ключа из пароля в командной строке
+Документация
+```
+man openssl-kdf
+```
+Генерируем 128-битовую соль:
+```
+openssl rand -hex 16
+d6d03beb84500bf2d374a8531c69b363
+```
+Формируем 256-битовый ключ симметричного шифрования
+```
+openssl kdf \
+-keylen 32 \
+-kdfopt pass:SuperPa$$w0rd \
+-kdfopt hexsalt:d6d03beb84500bf2d374a8531c69b363 \
+-kdfopt n:65536 \
+-kdfopt r:8 \
+-kdfopt p:1 \
+SCRYPT
+```
+результат
+```
+D4:C9:30:4C:B7:ED:FE:72:DA:CC:C6:0F:1E:DD:9D:92:02:DE:65:97:32:41:90:7E:3F:12:60:CC:9B:42:C5:B8
+```
+Пример из документации
+```
+openssl kdf -keylen 64 -kdfopt pass:password -kdfopt salt:NaCl \
+                       -kdfopt n:1024 -kdfopt r:8 -kdfopt p:16 \
+                       -kdfopt maxmem_bytes:10485760 SCRYPT
+```
+результат:
+```
+FD:BA:BE:1C:9D:34:72:00:78:56:E7:19:0D:01:E9:FE:7C:6A:D7:CB:C8:23:78:30:E7:73:76:63:4B:37:31:62:2E:AF:30:D9:2E:22:A3:88:6F:F1:09:27:9D:98:30:DA:C7:27:AF:B9:4A:83:EE:6D:83:60:CB:DF:A2:CC:06:40
+```
+## Программная реализация
+```
+cd kdf
+cc kdf.c -lssl -lcrypto
+./a.out SuperPa$$w0rd d6d03beb84500bf2d374a8531c69b363
+D4:C9:30:4C:B7:ED:FE:72:DA:CC:C6:0F:1E:DD:9D:92:02:DE:65:97:32:41:90:7E:3F:12:60:CC:9B:42:C5:B8
+```
+# Ассиметрично шифрование
+MITM - Man in the Middle - атака, в которой противник прослушивает транзитный трафик и изменяет его, пытаясь выдать себя:
+- отправителю за получателя
+- получателю за отправителя
+Варианты борьбы:
+- личная встреча
+- встречи для подписания ключей
+- проверка цифрового отпечатка ключа по телефону
+- разделение ключа
+- подписание ключа доверенной третьей стороной
+- сеть доверия PGP
+- PKI - Public Key Infrastructure 
+
+## Алгоритмы
+RSA - Непосредственная шифрация данных
+
+Для обмена ключами в протоколе TLS
+DSA - Digital Signature Algorithm
+ECDSA - Elliptic Curve Digital Signature Algorithm
+ECDH - Elliptic Curve Diffie-Helman
+
+ElGamal - опосредованное шифрование
+
+У каждого алгоритма ассимитричной криптографии своя структура открытого и закрытого ключей.
+Поэтому ключи есть разные: RSA, ECDSA...
+
+## Генерируем пару ключей RSA
+```
+cd rsa
+
+openssl genpkey \
+-algorithm RSA \
+-pkeyopt rsa_keygen_bits:4096 \
+-out rsa_keypair.pem
+```
+PEM - Privacy Enhanced Mail - почта с повышенной секретностью, обертка (заголовок и концевик), 
+DER внутри - Distinguished Encoding Rules, формат хранения ключей и сертификатов 
+```
+man openssl-pkey
+```
+Просмотреть пару ключей можно командой
+```
+openssl pkey -in rsa_keypair.pem -noout -text
+```
+Извлечь открытый ключ из пары:
+```
+openssl pkey \
+-in rsa_keypair.pem \
+-pubout \
+-out rsa_public_key.pem
+```
+Посмотреть содержание открытого ключа:
+```
+openssl pkey -pubin -in rsa_public_key.pem -noout -text
+```
+## Шифрация/дешифрация RSA
+Генерируем 256-битный сеансовый ключ
+```
+openssl rand -out session_key.bin 32
+```
+Шифруем сеансовый ключ
+```
+openssl pkeyutl \
+-encrypt \
+-in session_key.bin \
+-out session_key.bin.encrypted \
+-pubin \
+-inkey rsa_public_key.pem \
+-pkeyopt rsa_padding_mode:oaep
+```
+где -pkeyopt rsa_padding_mode:oaep задает использовать оптимальное дополнение ассиметричного шифрования OAEP
+
+```
+cksum session_key.bin*
+```
+Если повторно зашифровать, то размер не изменится, но контрольная сумма всегда будет разная
+
+Генерируем открытый текс
+```
+seq 20000 > somefile.txt
+```
+
+Шифруем его
+```
+openssl pkeyutl \
+-encrypt \
+-in somefile.txt \
+-out somefile.txt.encrypted \
+-pubin \
+-inkey rsa_public_key.pem \
+-pkeyopt rsa_padding_mode:oaep
+```
+получаем ошибку что открытый текст длиннее заданного ключа. 
+
+```
+openssl pkeyutl \
+-decrypt \
+-in session_key.bin.encrypted \
+-out session_key.bin.decrypted \
+-inkey rsa_keypair.pem \
+-pkeyopt rsa_padding_mode:oaep
+```
+Проверяем контрольную сумму:
+```
+cksum session_key.bin*
+```
+# Шифрование RSA программно
+Выполняем rsa-encrypt и шифруем созданный ранее 32-байтовый сеансовый ключ:
+```
+./rsa-encrypt \
+session_key.bin \
+session_key.bin.encrypted \
+rsa_public_key.pem
+```
+Проверяем контрольную сумму:
+```
+cksum session_key.bin*
+```
+Проверяем, что программа интероперабельная
+```
+openssl pkeyutl \
+-decrypt \
+-in session_key.bin.encrypted \
+-out session_key.bin.decrypted \
+-inkey rsa_keypair.pem \
+-pkeyopt rsa_padding_mode:oaep
+```
+Проверяем контрольную сумму:
+```
+cksum session_key.bin*
+```
